@@ -18,14 +18,13 @@ import {
   Check,
   User,
   Mail,
-  Home,
   Utensils,
   FileText,
-  Send,
-  Calendar
+  Send
 } from 'lucide-react';
 
 // --- 設定・定数 ---
+// GASのURL（デプロイURLをここに設定）
 const GOOGLE_SCRIPT_WEB_APP_URL = "https://script.google.com/macros/s/AKfycbxZemRhV8fb5Vk0rDvsS_UIjECST892akspCUD9ypGqFIFKo7oVJeNC2r5EFLDi5Xe9/exec";
 
 const QUESTIONS = [
@@ -91,7 +90,6 @@ const QUESTIONS = [
     }
 ];
 
-// 項目別アドバイスのマッピング
 const ITEM_ADVICE_MAP = {
     1: "「まずは体内時計のリセットを」 食事の時間がバラバラだと、太りやすくなったり自律神経が乱れたりします。まずは「朝食を食べる」ことから始め、リズムを整えましょう。",
     2: "「定食スタイルを意識して」 丼ものや麺類だけで済ませていませんか？「主食（炭水化物）、主菜（たんぱく質）、副菜（野菜）」を揃えるだけで、代謝がスムーズになります。",
@@ -101,10 +99,12 @@ const ITEM_ADVICE_MAP = {
 };
 
 // --- API 送信関数 ---
+
 const submitResultsToGoogleSheet = async (answers, freeComment) => {
     const formData = new FormData();
     formData.append('type', 'diagnosis');
-    formData.append('timestamp', new Date().toISOString());
+    // GAS側のheadersに合わせてキー名を設定
+    formData.append('timestamp', new Date().toLocaleString('ja-JP'));
     QUESTIONS.forEach(q => {
         const val = answers[q.id];
         const label = q.options.find(o => o.value === val)?.label || '';
@@ -117,14 +117,23 @@ const submitResultsToGoogleSheet = async (answers, freeComment) => {
     } catch (e) { console.error(e); }
 };
 
-const submitConsultationToGoogleSheet = async (data) => {
+const submitConsultationToGoogleSheet = async (data, answers) => {
     const formData = new FormData();
     formData.append('type', 'consultation');
-    formData.append('timestamp', new Date().toISOString());
+    formData.append('timestamp', new Date().toLocaleString('ja-JP'));
+    
+    // 相談フォームデータ
     Object.keys(data).forEach(key => {
         const val = Array.isArray(data[key]) ? data[key].join(', ') : data[key];
         formData.append(key, val);
     });
+
+    // ★紐付け用：GAS側の最新headersに合わせて「diag_Q(id)_score」という名前で送信
+    QUESTIONS.forEach(q => {
+        const val = answers[q.id];
+        formData.append(`diag_Q${q.id}_score`, val.toString());
+    });
+
     try {
         await fetch(GOOGLE_SCRIPT_WEB_APP_URL, { method: 'POST', body: formData, mode: 'no-cors' });
     } catch (e) { console.error(e); throw e; }
@@ -184,7 +193,7 @@ const ResultChart = ({ questions, answers }) => {
     );
 };
 
-const ConsultationForm = ({ onBack, onComplete }) => {
+const ConsultationForm = ({ onBack, onComplete, answers }) => {
     const [formData, setFormData] = useState({
         name: '', age: '', gender: '', email: '', livingSituation: '',
         mealCount: '', eatingOutFrequency: '', medicalHistory: '',
@@ -203,7 +212,7 @@ const ConsultationForm = ({ onBack, onComplete }) => {
         e.preventDefault();
         setIsSubmitting(true);
         try {
-            await submitConsultationToGoogleSheet(formData);
+            await submitConsultationToGoogleSheet(formData, answers);
             onComplete();
         } catch (err) {
             alert('送信に失敗しました。');
@@ -226,8 +235,7 @@ const ConsultationForm = ({ onBack, onComplete }) => {
                 <ArrowLeft size={18} /> 診断結果に戻る
             </button>
             <h2 className="text-3xl font-black text-gray-800 text-center mb-10">個別栄養相談申し込み</h2>
-            <form onSubmit={handleSubmit} className="space-y-8">
-                {/* 基本情報 */}
+            <form onSubmit={handleSubmit} className="space-y-8 text-left">
                 <div className="bg-white p-6 sm:p-8 rounded-3xl shadow-sm border border-gray-100 space-y-6">
                     <h3 className="text-lg font-bold flex items-center gap-2 text-green-600 border-b pb-2"><User size={20}/> 基本情報</h3>
                     <div>
@@ -254,7 +262,6 @@ const ConsultationForm = ({ onBack, onComplete }) => {
                     </div>
                 </div>
 
-                {/* 食生活 */}
                 <div className="bg-white p-6 sm:p-8 rounded-3xl shadow-sm border border-gray-100 space-y-6">
                     <h3 className="text-lg font-bold flex items-center gap-2 text-green-600 border-b pb-2"><Utensils size={20}/> 食生活</h3>
                     <div>
@@ -271,7 +278,6 @@ const ConsultationForm = ({ onBack, onComplete }) => {
                     </div>
                 </div>
 
-                {/* 詳細相談 */}
                 <div className="bg-white p-6 sm:p-8 rounded-3xl shadow-sm border border-gray-100 space-y-6">
                     <h3 className="text-lg font-bold flex items-center gap-2 text-green-600 border-b pb-2"><FileText size={20}/> ご相談内容</h3>
                     <div>
@@ -315,27 +321,17 @@ const App = () => {
         if (!isComplete) return null;
         const total = Object.values(answers).reduce((a, b) => a + b, 0);
         
-        // --- 点数別フィードバック案 (完全コピー) ---
         let rank = 'C', main = '', sub = '';
         if (total >= 21) {
-            rank = 'S';
-            main = "パーフェクト！";
-            sub = "素晴らしい食習慣です！今のリズムを維持して、理想の体をキープしましょう。";
+            rank = 'S'; main = "パーフェクト！"; sub = "素晴らしい食習慣です！今のリズムを維持して、理想の体をキープしましょう。";
         } else if (total >= 16) {
-            rank = 'A';
-            main = "あと一歩！";
-            sub = "基本はバッチリ。あと少しの意識でさらに良くなります。伸びしろがある項目から見直してみましょう。";
+            rank = 'A'; main = "あと一歩！"; sub = "基本はバッチリ。あと少しの意識でさらに良くなります。伸びしろがある項目から見直してみましょう。";
         } else if (total >= 11) {
-            rank = 'B';
-            main = "要注意…！";
-            sub = "生活リズムや栄養バランスに乱れが出始めています。まずは1つ、できそうな項目から改善を。";
+            rank = 'B'; main = "要注意…！"; sub = "生活リズムや栄養バランスに乱れが出始めています。まずは1つ、できそうな項目から改善を。";
         } else {
-            rank = 'D';
-            main = "見直しが必要！";
-            sub = "体がお疲れではありませんか？将来の健康のために、少しずつ食生活を整えていく準備をしましょう。";
+            rank = 'D'; main = "見直しが必要！"; sub = "体がお疲れではありませんか？将来の健康のために、少しずつ食生活を整えていく準備をしましょう。";
         }
 
-        // --- 項目別アドバイスロジック (スコア1または2のみ) ---
         const advices = QUESTIONS
             .filter(q => answers[q.id] <= 2)
             .map(q => ({ title: q.shortTitle, text: ITEM_ADVICE_MAP[q.id] }));
@@ -358,7 +354,7 @@ const App = () => {
     };
 
     return (
-        <div className="min-h-screen bg-gray-50 pb-20 font-sans text-gray-800">
+        <div className="min-h-screen bg-gray-50 pb-20 font-sans text-gray-800 text-center">
             {/* ヒーローセクション */}
             <header className="bg-gradient-to-br from-green-600 to-green-800 text-white pt-16 pb-32 px-4 relative overflow-hidden">
                 <div className="absolute top-0 right-0 w-96 h-96 bg-white opacity-5 rounded-full transform translate-x-1/2 -translate-y-1/2 blur-3xl"></div>
@@ -409,10 +405,9 @@ const App = () => {
                                 </div>
                                 <div className="grid md:grid-cols-2 gap-12 items-start mb-20">
                                     <ResultChart questions={QUESTIONS} answers={answers} />
-                                    <div className="space-y-8">
-                                        {/* 点数別総合フィードバック */}
-                                        <div className="bg-white/5 backdrop-blur-md border border-white/10 rounded-3xl p-8 shadow-inner">
-                                            <div className="flex items-baseline gap-4 mb-4 border-b border-white/10 pb-4">
+                                    <div className="space-y-8 text-left">
+                                        <div className="bg-white/5 backdrop-blur-md border border-white/10 rounded-3xl p-8 shadow-inner text-center">
+                                            <div className="flex items-baseline justify-center gap-4 mb-4 border-b border-white/10 pb-4">
                                                 <span className="text-gray-400 text-xs font-bold">評価ランク</span>
                                                 <span className="text-7xl font-black text-green-400">{diagnosis.rank}</span>
                                             </div>
@@ -420,7 +415,6 @@ const App = () => {
                                             <p className="text-gray-300 text-sm leading-relaxed font-medium">{diagnosis.sub}</p>
                                         </div>
 
-                                        {/* 項目別改善アドバイス (スコアが1 or 2の場合のみ表示) */}
                                         {diagnosis.advices.length > 0 && (
                                             <div className="space-y-4">
                                                 <h4 className="font-bold text-yellow-300 flex items-center gap-2 text-lg">
@@ -448,7 +442,7 @@ const App = () => {
 
                         {showConsultation && !consultationComplete && (
                             <div className="bg-gray-50 rounded-[3rem] shadow-2xl p-6 sm:p-12 text-gray-800">
-                                <ConsultationForm onBack={() => setShowConsultation(false)} onComplete={() => setConsultationComplete(true)} />
+                                <ConsultationForm onBack={() => setShowConsultation(false)} onComplete={() => setConsultationComplete(true)} answers={answers} />
                             </div>
                         )}
 
