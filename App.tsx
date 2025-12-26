@@ -24,7 +24,7 @@ import {
 } from 'lucide-react';
 
 // --- 設定・定数 ---
-// GASのURL（デプロイURLをここに設定）
+// いただいた最新のGAS WebアプリURL
 const GOOGLE_SCRIPT_WEB_APP_URL = "https://script.google.com/macros/s/AKfycbxZemRhV8fb5Vk0rDvsS_UIjECST892akspCUD9ypGqFIFKo7oVJeNC2r5EFLDi5Xe9/exec";
 
 const QUESTIONS = [
@@ -98,53 +98,66 @@ const ITEM_ADVICE_MAP = {
     5: "「あと一口、で止める勇気」 満腹まで食べると消化に負担がかかり、眠気や胃もたれの原因に。よく噛んで「もう少し食べたいな」で止めるのが、若々しさを保つコツです。"
 };
 
-// --- API 送信関数 ---
+// --- API 送信関数 (GAS側のheadersに完全対応) ---
 
 const submitResultsToGoogleSheet = async (answers, freeComment) => {
-    const formData = new FormData();
-    formData.append('type', 'diagnosis');
-    // GAS側のheadersに合わせてキー名を設定
-    formData.append('timestamp', new Date().toLocaleString('ja-JP'));
+    const params = new URLSearchParams();
+    params.append('type', 'diagnosis');
+    params.append('timestamp', new Date().toLocaleString('ja-JP'));
+    
     QUESTIONS.forEach(q => {
         const val = answers[q.id];
         const label = q.options.find(o => o.value === val)?.label || '';
-        formData.append(`Q${q.id}_score`, val.toString());
-        formData.append(`Q${q.id}_answer`, label);
+        params.append(`Q${q.id}_score`, val ? val.toString() : "");
+        params.append(`Q${q.id}_answer`, label);
     });
-    formData.append('free_comment', freeComment);
+    params.append('free_comment', freeComment || "");
+
     try {
-        await fetch(GOOGLE_SCRIPT_WEB_APP_URL, { method: 'POST', body: formData, mode: 'no-cors' });
-    } catch (e) { console.error(e); }
+        await fetch(GOOGLE_SCRIPT_WEB_APP_URL, {
+            method: 'POST',
+            mode: 'no-cors',
+            body: params
+        });
+    } catch (e) { console.error("診断結果送信エラー:", e); }
 };
 
 const submitConsultationToGoogleSheet = async (data, answers) => {
-    const formData = new FormData();
-    formData.append('type', 'consultation');
-    formData.append('timestamp', new Date().toLocaleString('ja-JP'));
+    const params = new URLSearchParams();
+    params.append('type', 'consultation');
+    params.append('timestamp', new Date().toLocaleString('ja-JP'));
     
-    // 相談フォームデータ
+    // GAS側の headers = ["name", "age", "gender", "email", ...] に合わせる
     Object.keys(data).forEach(key => {
         const val = Array.isArray(data[key]) ? data[key].join(', ') : data[key];
-        formData.append(key, val);
+        params.append(key, val || "");
     });
 
-    // ★紐付け用：GAS側の最新headersに合わせて「diag_Q(id)_score」という名前で送信
+    // 診断回答の紐付け (GAS側の diag_Q1_score 等に合わせる)
     QUESTIONS.forEach(q => {
         const val = answers[q.id];
-        formData.append(`diag_Q${q.id}_score`, val.toString());
+        params.append(`diag_Q${q.id}_score`, val ? val.toString() : "");
     });
 
     try {
-        await fetch(GOOGLE_SCRIPT_WEB_APP_URL, { method: 'POST', body: formData, mode: 'no-cors' });
-    } catch (e) { console.error(e); throw e; }
+        // no-corsモードではレスポンスを読み取れないため、成功したとみなして処理する
+        await fetch(GOOGLE_SCRIPT_WEB_APP_URL, {
+            method: 'POST',
+            mode: 'no-cors',
+            body: params
+        });
+    } catch (e) {
+        console.error("相談フォーム送信エラー:", e);
+        throw e;
+    }
 };
 
-// --- サブコンポーネント ---
+// --- 子コンポーネント ---
 
 const QuestionCard = ({ question, selectedValue, onSelect }) => (
-    <div className="bg-white rounded-3xl shadow-sm border border-gray-100 p-6 sm:p-8 transition-all hover:shadow-md">
+    <div className="bg-white rounded-3xl shadow-sm border border-gray-100 p-6 sm:p-8 transition-all hover:shadow-md text-left">
         <div className="flex flex-col sm:flex-row sm:items-center gap-4 mb-8">
-            <span className="flex-shrink-0 flex items-center justify-center w-12 h-12 rounded-2xl bg-gradient-to-br from-green-500 to-green-600 text-white font-bold text-xl">
+            <span className="flex-shrink-0 flex items-center justify-center w-12 h-12 rounded-2xl bg-gradient-to-br from-green-500 to-green-600 text-white font-bold text-xl shadow-lg shadow-green-100">
                 Q{question.id}
             </span>
             <h3 className="text-lg sm:text-xl font-bold text-gray-800 leading-tight">
@@ -215,7 +228,7 @@ const ConsultationForm = ({ onBack, onComplete, answers }) => {
             await submitConsultationToGoogleSheet(formData, answers);
             onComplete();
         } catch (err) {
-            alert('送信に失敗しました。');
+            alert('送信に失敗しました。時間をおいて再度お試しください。');
         } finally {
             setIsSubmitting(false);
         }
@@ -231,16 +244,16 @@ const ConsultationForm = ({ onBack, onComplete, answers }) => {
 
     return (
         <div className="max-w-2xl mx-auto">
-            <button onClick={onBack} className="flex items-center gap-2 text-gray-500 hover:text-green-600 mb-8 font-bold">
+            <button onClick={onBack} className="flex items-center gap-2 text-gray-500 hover:text-green-600 mb-8 font-bold transition-colors">
                 <ArrowLeft size={18} /> 診断結果に戻る
             </button>
-            <h2 className="text-3xl font-black text-gray-800 text-center mb-10">個別栄養相談申し込み</h2>
+            <h2 className="text-3xl font-black text-gray-800 text-center mb-10 tracking-tight">個別栄養相談申し込み</h2>
             <form onSubmit={handleSubmit} className="space-y-8 text-left">
                 <div className="bg-white p-6 sm:p-8 rounded-3xl shadow-sm border border-gray-100 space-y-6">
                     <h3 className="text-lg font-bold flex items-center gap-2 text-green-600 border-b pb-2"><User size={20}/> 基本情報</h3>
                     <div>
                         <label className="block text-sm font-bold text-gray-700 mb-2">氏名 (必須)</label>
-                        <input type="text" name="name" required value={formData.name} onChange={handleChange} className="w-full px-5 py-3 rounded-xl border-2 border-gray-100 bg-gray-50 focus:bg-white focus:border-green-500 outline-none transition-all" />
+                        <input type="text" name="name" required value={formData.name} onChange={handleChange} className="w-full px-5 py-3 rounded-xl border-2 border-gray-100 bg-gray-50 focus:bg-white focus:border-green-500 outline-none transition-all" placeholder="例：山田 花子" />
                     </div>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
                         <div>
@@ -258,7 +271,7 @@ const ConsultationForm = ({ onBack, onComplete, answers }) => {
                     </div>
                     <div>
                         <label className="block text-sm font-bold text-gray-700 mb-2">メールアドレス (必須)</label>
-                        <input type="email" name="email" required value={formData.email} onChange={handleChange} className="w-full px-5 py-3 rounded-xl border-2 border-gray-100 bg-gray-50 focus:bg-white focus:border-green-500 outline-none transition-all" />
+                        <input type="email" name="email" required value={formData.email} onChange={handleChange} className="w-full px-5 py-3 rounded-xl border-2 border-gray-100 bg-gray-50 focus:bg-white focus:border-green-500 outline-none transition-all" placeholder="example@email.com" />
                     </div>
                 </div>
 
@@ -356,16 +369,16 @@ const App = () => {
     return (
         <div className="min-h-screen bg-gray-50 pb-20 font-sans text-gray-800 text-center">
             {/* ヒーローセクション */}
-            <header className="bg-gradient-to-br from-green-600 to-green-800 text-white pt-16 pb-32 px-4 relative overflow-hidden">
+            <header className="bg-gradient-to-br from-green-600 to-green-800 text-white pt-16 pb-32 px-4 relative overflow-hidden text-center">
                 <div className="absolute top-0 right-0 w-96 h-96 bg-white opacity-5 rounded-full transform translate-x-1/2 -translate-y-1/2 blur-3xl"></div>
                 <div className="max-w-3xl mx-auto text-center relative z-10">
-                    <div className="inline-flex items-center gap-2 bg-white/10 backdrop-blur-md px-5 py-2 rounded-full text-green-50 font-bold text-sm mb-8 border border-white/20">
+                    <div className="inline-flex items-center gap-2 bg-white/10 backdrop-blur-md px-5 py-2 rounded-full text-green-50 font-bold text-sm mb-8 border border-white/20 shadow-lg">
                         <Activity size={16} /> 管理栄養士監修
                     </div>
-                    <h1 className="text-4xl md:text-6xl font-black mb-8 leading-tight">
+                    <h1 className="text-4xl md:text-6xl font-black mb-8 leading-tight tracking-tight">
                         あなたの食生活、<br/><span className="text-yellow-300">足りていますか？</span>
                     </h1>
-                    <p className="text-green-50 text-lg md:text-xl max-w-xl mx-auto mb-10 opacity-90 font-medium">
+                    <p className="text-green-50 text-lg md:text-xl max-w-xl mx-auto mb-10 opacity-90 font-medium leading-relaxed">
                         5つの質問で、今のあなたの栄養バランスを「見える化」します。
                     </p>
                     {!showResult && (
@@ -382,7 +395,7 @@ const App = () => {
                     {QUESTIONS.map(q => (
                         <QuestionCard key={q.id} question={q} selectedValue={answers[q.id]} onSelect={(v) => handleAnswer(q.id, v)} />
                     ))}
-                    <div className="bg-white rounded-3xl shadow-sm border border-gray-100 p-6 sm:p-8">
+                    <div className="bg-white rounded-3xl shadow-sm border border-gray-100 p-6 sm:p-8 text-left">
                         <h3 className="text-lg font-bold text-gray-800 mb-4 flex items-center gap-2">
                             <span className="bg-gray-100 text-gray-500 text-[10px] px-2 py-1 rounded-md font-black">任意</span> お悩み・相談内容
                         </h3>
@@ -401,11 +414,11 @@ const App = () => {
                             <>
                                 <div className="text-center mb-16">
                                     <h2 className="text-green-400 font-black tracking-widest uppercase mb-3 text-sm">Diagnosis Result</h2>
-                                    <p className="text-4xl font-black">診断結果</p>
+                                    <p className="text-4xl font-black tracking-tight">診断結果</p>
                                 </div>
-                                <div className="grid md:grid-cols-2 gap-12 items-start mb-20">
+                                <div className="grid md:grid-cols-2 gap-12 items-start mb-20 text-left">
                                     <ResultChart questions={QUESTIONS} answers={answers} />
-                                    <div className="space-y-8 text-left">
+                                    <div className="space-y-8">
                                         <div className="bg-white/5 backdrop-blur-md border border-white/10 rounded-3xl p-8 shadow-inner text-center">
                                             <div className="flex items-baseline justify-center gap-4 mb-4 border-b border-white/10 pb-4">
                                                 <span className="text-gray-400 text-xs font-bold">評価ランク</span>
@@ -431,7 +444,7 @@ const App = () => {
                                             </div>
                                         )}
 
-                                        <button onClick={() => setShowConsultation(true)} className="w-full bg-green-500 hover:bg-green-400 text-white py-5 rounded-2xl font-bold text-lg shadow-lg flex items-center justify-center gap-3 transition-all hover:scale-105 active:scale-95">
+                                        <button onClick={() => setShowConsultation(true)} className="w-full bg-green-500 hover:bg-green-400 text-white py-5 rounded-2xl font-bold text-lg shadow-lg flex items-center justify-center gap-3 transition-all hover:scale-105 active:scale-95 text-center">
                                             管理栄養士に詳しく相談する <ArrowRight size={20} />
                                         </button>
                                     </div>
@@ -449,8 +462,8 @@ const App = () => {
                         {consultationComplete && (
                             <div className="bg-white text-gray-800 rounded-[3rem] shadow-2xl p-16 text-center max-w-lg mx-auto flex flex-col items-center">
                                 <div className="w-24 h-24 bg-green-100 text-green-600 rounded-full flex items-center justify-center mb-8 shadow-inner animate-bounce"><CheckCircle size={48} strokeWidth={3} /></div>
-                                <h2 className="text-3xl font-black mb-4">送信完了</h2>
-                                <p className="text-gray-500 mb-12 font-bold leading-relaxed text-lg">ご回答ありがとうございました。<br/>担当者より折り返しご連絡いたします。</p>
+                                <h2 className="text-3xl font-black mb-4 text-center">送信完了</h2>
+                                <p className="text-gray-500 mb-12 font-bold leading-relaxed text-lg text-center">ご回答ありがとうございました。<br/>担当者より折り返しご連絡いたします。</p>
                                 <button onClick={handleReset} className="bg-gray-900 text-white px-12 py-4 rounded-full font-black text-lg shadow-xl hover:scale-105 transition-all">トップに戻る</button>
                             </div>
                         )}
